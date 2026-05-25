@@ -1,5 +1,3 @@
-import Anthropic from '@anthropic-ai/sdk';
-
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -10,16 +8,14 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Image data missing' });
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: 'API key not configured. Please add ANTHROPIC_API_KEY to your environment variables.' });
+    return res.status(500).json({ error: 'API key not configured. Please add GEMINI_API_KEY to your environment variables.' });
   }
-
-  const client = new Anthropic({ apiKey });
 
   const prompt = `তুমি একজন বিশেষজ্ঞ পুষ্টিবিদ। এই খাবারের ছবি বিশ্লেষণ করো এবং নিম্নলিখিত তথ্য JSON ফরম্যাটে দাও।
 
-গুরুত্বপূর্ণ: শুধুমাত্র valid JSON দাও, কোনো অতিরিক্ত টেক্সট নয়।
+গুরুত্বপূর্ণ: শুধুমাত্র valid JSON দাও, কোনো অতিরিক্ত টেক্সট বা markdown backtick নয়।
 
 {
   "foodName": "খাবারের বাংলা নাম",
@@ -36,37 +32,43 @@ export default async function handler(req, res) {
 }
 
 যদি ছবিতে খাবার না থাকে তাহলে:
-{
-  "error": "এই ছবিতে কোনো খাবার দেখা যাচ্ছে না"
-}`;
+{"error": "এই ছবিতে কোনো খাবার দেখা যাচ্ছে না"}`;
 
   try {
-    const response = await client.messages.create({
-      model: 'claude-opus-4-5',
-      max_tokens: 1024,
-      messages: [
-        {
-          role: 'user',
-          content: [
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [
             {
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: mediaType,
-                data: image,
-              },
-            },
-            {
-              type: 'text',
-              text: prompt,
+              parts: [
+                {
+                  inline_data: {
+                    mime_type: mediaType,
+                    data: image,
+                  },
+                },
+                { text: prompt },
+              ],
             },
           ],
-        },
-      ],
-    });
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 1024,
+          },
+        }),
+      }
+    );
 
-    const text = response.content[0].text.trim();
-    // Strip markdown code fences if present
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error?.message || 'Gemini API error');
+    }
+
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
     const clean = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     const parsed = JSON.parse(clean);
 
@@ -76,7 +78,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json(parsed);
   } catch (err) {
-    console.error('Claude API error:', err);
+    console.error('Gemini API error:', err);
     if (err instanceof SyntaxError) {
       return res.status(500).json({ error: 'AI থেকে তথ্য পাঠানোয় সমস্যা হয়েছে। আবার চেষ্টা করুন।' });
     }
